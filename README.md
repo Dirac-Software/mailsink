@@ -5,7 +5,9 @@ emails. Examples include cron, windmill.dev and so on.
 
 Unfortunately, the rise of spam has made simple unauthenticated SMTP a
 thing of the past, and self-hosting email is becoming increasingly difficult
-and time-consuming.
+and time-consuming. GMail is also unusable for large mailboxes, operations
+like deleting large amounts of bulk emails are painfully slow if they even
+complete without generating errors.
 
 Mailsink is a server that is configured as a relayhost. All emails get saved
 to a SQLite database, and it has a web server to see the emails and search
