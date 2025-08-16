@@ -161,8 +161,19 @@
         }
 
         .email-body {
-            white-space: pre-wrap;
             line-height: 1.6;
+        }
+
+        .email-body.plain-text {
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+
+        .email-body-frame {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 16px;
+            background: #fff;
         }
 
         .no-emails {
@@ -251,14 +262,26 @@
             }
 
             const content = document.getElementById('emailDetailContent');
+            
+            // Use sanitized HTML from server or plain text
+            let bodyContent;
+            if (email.contentType === 'text/html' && email.sanitizedHtml) {
+                // Display server-sanitized HTML
+                bodyContent = `<div class="email-body-frame"><div class="email-body">${email.sanitizedHtml}</div></div>`;
+            } else {
+                // Display plain text with proper escaping
+                bodyContent = `<div class="email-body plain-text">${escapeHtml(email.body)}</div>`;
+            }
+            
             content.innerHTML = `
                 <div class="email-detail-meta">
                     <div><strong>From:</strong> ${escapeHtml(email.from)}</div>
                     <div><strong>To:</strong> ${escapeHtml(email.to)}</div>
                     <div><strong>Subject:</strong> ${escapeHtml(email.subject || '(No subject)')}</div>
                     <div><strong>Date:</strong> ${formatDate(email.timestamp)}</div>
+                    <div><strong>Type:</strong> ${email.contentType === 'text/html' ? 'HTML' : 'Plain Text'}</div>
                 </div>
-                <div class="email-body">${email.html ? email.html : escapeHtml(email.body)}</div>
+                ${bodyContent}
             `;
 
             document.getElementById('emailDetail').classList.add('open');

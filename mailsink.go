@@ -1,17 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"embed"
 	"encoding/json"
 	"flag"
 	"html/template"
+	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
 	"github.com/chrj/smtpd"
+	"github.com/microcosm-cc/bluemonday"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -19,19 +25,28 @@ import (
 var templatesFS embed.FS
 
 type Email struct {
-	ID        int64     `json:"id"`
-	From      string    `json:"from"`
-	To        string    `json:"to"`
-	Subject   string    `json:"subject"`
-	Body      string    `json:"body"`
-	HTML      string    `json:"html"`
-	Raw       string    `json:"raw"`
-	Timestamp time.Time `json:"timestamp"`
+	ID            int64     `json:"id"`
+	From          string    `json:"from"`
+	To            string    `json:"to"`
+	Subject       string    `json:"subject"`
+	Body          string    `json:"body"`
+	HTML          string    `json:"html"`
+	SanitizedHTML string    `json:"sanitizedHtml"`
+	Raw           string    `json:"raw"`
+	Timestamp     time.Time `json:"timestamp"`
+	ContentType   string    `json:"contentType"`
 }
 
 var (
-	db *sql.DB
+	db            *sql.DB
+	htmlSanitizer *bluemonday.Policy
 )
+
+func initSanitizer() {
+	htmlSanitizer = bluemonday.UGCPolicy()
+	htmlSanitizer.AllowAttrs("style").OnElements("p", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6")
+	htmlSanitizer.AllowStyles("color", "background-color", "font-weight", "font-style", "text-decoration", "text-align").Globally()
+}
 
 func initDB(dbPath string) error {
 	var err error
@@ -101,6 +116,61 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 }
 
 func parseEmail(raw string) (subject, body, html string) {
+	msg, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		return parseEmailSimple(raw)
+	}
+
+	if msg.Header != nil {
+		subject = msg.Header.Get("Subject")
+	}
+
+	contentType := msg.Header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = "text/plain"
+	}
+
+	if strings.HasPrefix(mediaType, "multipart/") {
+		mr := multipart.NewReader(msg.Body, params["boundary"])
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				break
+			}
+
+			partContentType := part.Header.Get("Content-Type")
+			partMediaType, _, _ := mime.ParseMediaType(partContentType)
+
+			buf := new(bytes.Buffer)
+			_, _ = buf.ReadFrom(part)
+			content := buf.String()
+
+			if partMediaType == "text/plain" && body == "" {
+				body = strings.TrimSpace(content)
+			} else if partMediaType == "text/html" && html == "" {
+				html = strings.TrimSpace(content)
+			}
+		}
+	} else {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(msg.Body)
+		content := buf.String()
+
+		if mediaType == "text/html" {
+			html = strings.TrimSpace(content)
+		} else {
+			body = strings.TrimSpace(content)
+		}
+	}
+
+	return subject, body, html
+}
+
+func parseEmailSimple(raw string) (subject, body, html string) {
 	lines := strings.Split(raw, "\n")
 	inBody := false
 	isHTML := false
@@ -188,6 +258,15 @@ func emailsHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		
+		// Determine content type and sanitize HTML if present
+		if e.HTML != "" {
+			e.ContentType = "text/html"
+			e.SanitizedHTML = htmlSanitizer.Sanitize(e.HTML)
+		} else {
+			e.ContentType = "text/plain"
+		}
+		
 		emails = append(emails, e)
 	}
 
@@ -209,6 +288,14 @@ func emailHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Email not found", http.StatusNotFound)
 		return
 	}
+	
+	// Determine content type and sanitize HTML if present
+	if e.HTML != "" {
+		e.ContentType = "text/html"
+		e.SanitizedHTML = htmlSanitizer.Sanitize(e.HTML)
+	} else {
+		e.ContentType = "text/plain"
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(e)
@@ -222,6 +309,8 @@ func main() {
 	)
 	flag.Parse()
 
+	initSanitizer()
+	
 	if err := initDB(*dbPath); err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
