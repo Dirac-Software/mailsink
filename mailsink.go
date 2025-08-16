@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/buildkite/terminal-to-html/v3"
 	"github.com/chrj/smtpd"
 	"github.com/microcosm-cc/bluemonday"
 	_ "github.com/mattn/go-sqlite3"
@@ -32,9 +33,11 @@ type Email struct {
 	Body          string    `json:"body"`
 	HTML          string    `json:"html"`
 	SanitizedHTML string    `json:"sanitizedHtml"`
+	AnsiHTML      string    `json:"ansiHtml"`
 	Raw           string    `json:"raw"`
 	Timestamp     time.Time `json:"timestamp"`
 	ContentType   string    `json:"contentType"`
+	HasAnsi       bool      `json:"hasAnsi"`
 }
 
 var (
@@ -46,6 +49,22 @@ func initSanitizer() {
 	htmlSanitizer = bluemonday.UGCPolicy()
 	htmlSanitizer.AllowAttrs("style").OnElements("p", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6")
 	htmlSanitizer.AllowStyles("color", "background-color", "font-weight", "font-style", "text-decoration", "text-align").Globally()
+}
+
+func hasAnsiCodes(text string) bool {
+	// Check for ANSI escape sequences
+	return strings.Contains(text, "\x1b[")
+}
+
+func convertAnsiToHTML(text string) string {
+	// Convert ANSI codes to HTML
+	html := string(terminal.Render([]byte(text)))
+	
+	// The terminal library doesn't preserve line breaks, so we need to ensure they're converted to <br>
+	// Replace newlines with <br> tags while preserving the ANSI-converted HTML
+	html = strings.ReplaceAll(html, "\n", "<br>")
+	
+	return html
 }
 
 func initDB(dbPath string) error {
@@ -259,12 +278,17 @@ func emailsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		
-		// Determine content type and sanitize HTML if present
+		// Determine content type and process content
 		if e.HTML != "" {
 			e.ContentType = "text/html"
 			e.SanitizedHTML = htmlSanitizer.Sanitize(e.HTML)
 		} else {
 			e.ContentType = "text/plain"
+			// Check for ANSI codes in plain text
+			if hasAnsiCodes(e.Body) {
+				e.HasAnsi = true
+				e.AnsiHTML = convertAnsiToHTML(e.Body)
+			}
 		}
 		
 		emails = append(emails, e)
@@ -289,12 +313,17 @@ func emailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Determine content type and sanitize HTML if present
+	// Determine content type and process content
 	if e.HTML != "" {
 		e.ContentType = "text/html"
 		e.SanitizedHTML = htmlSanitizer.Sanitize(e.HTML)
 	} else {
 		e.ContentType = "text/plain"
+		// Check for ANSI codes in plain text
+		if hasAnsiCodes(e.Body) {
+			e.HasAnsi = true
+			e.AnsiHTML = convertAnsiToHTML(e.Body)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

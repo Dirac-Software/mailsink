@@ -174,6 +174,35 @@
             font-family: monospace;
         }
 
+        .email-body.ansi-text {
+            font-family: 'Courier New', Courier, monospace;
+            background: #000;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 4px;
+            overflow-x: auto;
+            line-height: 1.4;
+        }
+        
+        /* Terminal-to-html specific styles */
+        .email-body.ansi-text .term-fg30 { color: #000; }
+        .email-body.ansi-text .term-fg31 { color: #c23621; }
+        .email-body.ansi-text .term-fg32 { color: #25bc26; }
+        .email-body.ansi-text .term-fg33 { color: #c7c329; }
+        .email-body.ansi-text .term-fg34 { color: #2472c8; }
+        .email-body.ansi-text .term-fg35 { color: #bc3fbc; }
+        .email-body.ansi-text .term-fg36 { color: #0fa8cd; }
+        .email-body.ansi-text .term-fg37 { color: #d4d4d4; }
+        
+        .email-body.ansi-text .term-bg40 { background-color: #000; }
+        .email-body.ansi-text .term-bg41 { background-color: #c23621; }
+        .email-body.ansi-text .term-bg42 { background-color: #25bc26; }
+        .email-body.ansi-text .term-bg43 { background-color: #c7c329; }
+        .email-body.ansi-text .term-bg44 { background-color: #2472c8; }
+        .email-body.ansi-text .term-bg45 { background-color: #bc3fbc; }
+        .email-body.ansi-text .term-bg46 { background-color: #0fa8cd; }
+        .email-body.ansi-text .term-bg47 { background-color: #d4d4d4; }
+
         .email-body-frame {
             border: 1px solid #ddd;
             border-radius: 4px;
@@ -268,14 +297,22 @@
 
             const content = document.getElementById('emailDetailContent');
             
-            // Use sanitized HTML from server or plain text
+            // Use server-processed content
             let bodyContent;
+            let displayType;
+            
             if (email.contentType === 'text/html' && email.sanitizedHtml) {
                 // Display server-sanitized HTML
                 bodyContent = `<div class="email-body-frame"><div class="email-body">${email.sanitizedHtml}</div></div>`;
+                displayType = 'HTML';
+            } else if (email.hasAnsi && email.ansiHtml) {
+                // Display server-converted ANSI HTML
+                bodyContent = `<div class="email-body ansi-text">${email.ansiHtml}</div>`;
+                displayType = 'Plain Text (ANSI)';
             } else {
                 // Display plain text with proper escaping
                 bodyContent = `<div class="email-body plain-text">${escapeHtml(email.body)}</div>`;
+                displayType = 'Plain Text';
             }
             
             content.innerHTML = `
@@ -284,7 +321,7 @@
                     <div><strong>To:</strong> ${escapeHtml(email.to)}</div>
                     <div><strong>Subject:</strong> ${escapeHtml(email.subject || '(No subject)')}</div>
                     <div><strong>Date:</strong> ${formatDate(email.timestamp)}</div>
-                    <div><strong>Type:</strong> ${email.contentType === 'text/html' ? 'HTML' : 'Plain Text'}</div>
+                    <div><strong>Type:</strong> ${displayType}</div>
                 </div>
                 ${bodyContent}
             `;
