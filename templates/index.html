@@ -87,6 +87,11 @@
         .email-from {
             font-weight: 600;
             color: #333;
+            flex: 1;
+            margin-right: 10px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .email-timestamp {
@@ -245,7 +250,7 @@
             emailList.innerHTML = emails.map(email => `
                 <div class="email-item" onclick="showEmailDetail(${email.id})">
                     <div class="email-header">
-                        <div class="email-from">${escapeHtml(email.from)}</div>
+                        <div class="email-from">${escapeHtml(email.from)} → ${escapeHtml(email.to)}</div>
                         <div class="email-timestamp">${formatDate(email.timestamp)}</div>
                     </div>
                     <div class="email-subject">${escapeHtml(email.subject || '(No subject)')}</div>
