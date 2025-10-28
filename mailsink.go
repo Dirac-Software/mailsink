@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/mail"
+	"net/smtp"
 	"strings"
 	"time"
 
@@ -43,6 +44,7 @@ type Email struct {
 var (
 	db            *sql.DB
 	htmlSanitizer *bluemonday.Policy
+	forwardAddr   string
 )
 
 func initSanitizer() {
@@ -112,6 +114,41 @@ func initDB(dbPath string) error {
 	return err
 }
 
+func forwardEmail(from string, recipients []string, data []byte) error {
+	// Connect to the SMTP server
+	c, err := smtp.Dial(forwardAddr)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	// Set the sender
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+
+	// Set the recipients
+	for _, recipient := range recipients {
+		if err := c.Rcpt(recipient); err != nil {
+			return err
+		}
+	}
+
+	// Send the email body
+	wc, err := c.Data()
+	if err != nil {
+		return err
+	}
+	defer wc.Close()
+
+	_, err = wc.Write(data)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 	from := env.Sender
 	recipients := strings.Join(env.Recipients, ", ")
@@ -131,6 +168,16 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 	}
 
 	log.Printf("Email received from %s to %s", from, recipients)
+
+	// Forward email if forwarding is enabled
+	if forwardAddr != "" {
+		if err := forwardEmail(from, env.Recipients, data); err != nil {
+			log.Printf("Failed to forward email: %v", err)
+		} else {
+			log.Printf("Email forwarded to %s", forwardAddr)
+		}
+	}
+
 	return nil
 }
 
@@ -335,8 +382,19 @@ func main() {
 		smtpAddr = flag.String("smtp", "127.0.0.1:2525", "SMTP server address")
 		httpAddr = flag.String("http", "127.0.0.1:8080", "HTTP server address")
 		dbPath   = flag.String("db", "mailsink.db", "SQLite database path")
+		forward  = flag.String("forward", "", "Forward emails to hostname or hostname:port (default port 25)")
 	)
 	flag.Parse()
+
+	// Parse forward address and add default port if needed
+	if *forward != "" {
+		if !strings.Contains(*forward, ":") {
+			forwardAddr = *forward + ":25"
+		} else {
+			forwardAddr = *forward
+		}
+		log.Printf("Email forwarding enabled to %s", forwardAddr)
+	}
 
 	initSanitizer()
 	
