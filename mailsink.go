@@ -20,6 +20,7 @@ import (
 	"github.com/chrj/smtpd"
 	"github.com/microcosm-cc/bluemonday"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nsqio/go-nsq"
 )
 
 //go:embed templates/*
@@ -43,6 +44,8 @@ type Email struct {
 var (
 	db            *sql.DB
 	htmlSanitizer *bluemonday.Policy
+	nsqProducer   *nsq.Producer
+	nsqTopic      string
 )
 
 func initSanitizer() {
@@ -115,7 +118,7 @@ func initDB(dbPath string) error {
 func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 	from := env.Sender
 	recipients := strings.Join(env.Recipients, ", ")
-	
+
 	data := env.Data
 
 	rawEmail := string(data)
@@ -128,6 +131,17 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 
 	if err != nil {
 		return err
+	}
+
+	// Publish to NSQ if configured
+	if nsqTopic != "" && nsqProducer != nil {
+		err = nsqProducer.Publish(nsqTopic, data)
+		if err != nil {
+			log.Printf("Failed to publish to NSQ: %v", err)
+			// Don't return error - email is already saved to DB
+		} else {
+			log.Printf("Published email to NSQ topic: %s", nsqTopic)
+		}
 	}
 
 	log.Printf("Email received from %s to %s", from, recipients)
@@ -332,16 +346,31 @@ func emailHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var (
-		smtpAddr = flag.String("smtp", "127.0.0.1:2525", "SMTP server address")
-		httpAddr = flag.String("http", "127.0.0.1:8080", "HTTP server address")
-		dbPath   = flag.String("db", "mailsink.db", "SQLite database path")
+		smtpAddr      = flag.String("smtp", "127.0.0.1:2525", "SMTP server address")
+		httpAddr      = flag.String("http", "127.0.0.1:8080", "HTTP server address")
+		dbPath        = flag.String("db", "mailsink.db", "SQLite database path")
+		nsqdTCPAddr   = flag.String("nsqd-tcp-address", "localhost:4150", "NSQd TCP address")
+		nsqdTopicFlag = flag.String("nsqd-topic", "", "NSQ topic to publish emails to (empty to disable)")
 	)
 	flag.Parse()
 
 	initSanitizer()
-	
+
 	if err := initDB(*dbPath); err != nil {
 		log.Fatal("Failed to initialize database:", err)
+	}
+
+	// Initialize NSQ producer if topic is configured
+	nsqTopic = *nsqdTopicFlag
+	if nsqTopic != "" {
+		config := nsq.NewConfig()
+		var err error
+		nsqProducer, err = nsq.NewProducer(*nsqdTCPAddr, config)
+		if err != nil {
+			log.Fatal("Failed to create NSQ producer:", err)
+		}
+		defer nsqProducer.Stop()
+		log.Printf("NSQ publisher enabled: topic=%s, address=%s", nsqTopic, *nsqdTCPAddr)
 	}
 
 	srv := &smtpd.Server{
