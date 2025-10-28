@@ -43,6 +43,7 @@ type Email struct {
 var (
 	db            *sql.DB
 	htmlSanitizer *bluemonday.Policy
+	webhookURL    string
 )
 
 func initSanitizer() {
@@ -112,16 +113,41 @@ func initDB(dbPath string) error {
 	return err
 }
 
+func sendWebhook(email Email) {
+	if webhookURL == "" {
+		return
+	}
+
+	jsonData, err := json.Marshal(email)
+	if err != nil {
+		log.Printf("Failed to marshal email for webhook: %v", err)
+		return
+	}
+
+	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Failed to send webhook: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		log.Printf("Webhook returned error status: %d", resp.StatusCode)
+	} else {
+		log.Printf("Webhook sent successfully to %s", webhookURL)
+	}
+}
+
 func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 	from := env.Sender
 	recipients := strings.Join(env.Recipients, ", ")
-	
+
 	data := env.Data
 
 	rawEmail := string(data)
 	subject, body, html := parseEmail(rawEmail)
 
-	_, err := db.Exec(`
+	result, err := db.Exec(`
 		INSERT INTO emails (from_addr, to_addr, subject, body, html, raw)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, from, recipients, subject, body, html, rawEmail)
@@ -131,6 +157,23 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 	}
 
 	log.Printf("Email received from %s to %s", from, recipients)
+
+	// Send webhook if configured
+	if webhookURL != "" {
+		id, _ := result.LastInsertId()
+		email := Email{
+			ID:        id,
+			From:      from,
+			To:        recipients,
+			Subject:   subject,
+			Body:      body,
+			HTML:      html,
+			Raw:       rawEmail,
+			Timestamp: time.Now(),
+		}
+		go sendWebhook(email)
+	}
+
 	return nil
 }
 
@@ -335,8 +378,11 @@ func main() {
 		smtpAddr = flag.String("smtp", "127.0.0.1:2525", "SMTP server address")
 		httpAddr = flag.String("http", "127.0.0.1:8080", "HTTP server address")
 		dbPath   = flag.String("db", "mailsink.db", "SQLite database path")
+		webhook  = flag.String("webhook", "", "Webhook URL to POST email data to")
 	)
 	flag.Parse()
+
+	webhookURL = *webhook
 
 	initSanitizer()
 	
