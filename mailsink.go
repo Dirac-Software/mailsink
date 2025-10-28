@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -45,6 +46,7 @@ var (
 	db            *sql.DB
 	htmlSanitizer *bluemonday.Policy
 	forwardAddr   string
+	useStartTLS   bool
 )
 
 func initSanitizer() {
@@ -121,6 +123,17 @@ func forwardEmail(from string, recipients []string, data []byte) error {
 		return err
 	}
 	defer c.Close()
+
+	// Use STARTTLS if enabled
+	if useStartTLS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         strings.Split(forwardAddr, ":")[0],
+		}
+		if err := c.StartTLS(tlsConfig); err != nil {
+			return err
+		}
+	}
 
 	// Set the sender
 	if err := c.Mail(from); err != nil {
@@ -383,6 +396,7 @@ func main() {
 		httpAddr = flag.String("http", "127.0.0.1:8080", "HTTP server address")
 		dbPath   = flag.String("db", "mailsink.db", "SQLite database path")
 		forward  = flag.String("forward", "", "Forward emails to hostname or hostname:port (default port 25)")
+		starttls = flag.Bool("starttls", false, "Use STARTTLS when forwarding (without certificate verification)")
 	)
 	flag.Parse()
 
@@ -393,7 +407,12 @@ func main() {
 		} else {
 			forwardAddr = *forward
 		}
-		log.Printf("Email forwarding enabled to %s", forwardAddr)
+		useStartTLS = *starttls
+		if useStartTLS {
+			log.Printf("Email forwarding enabled to %s with STARTTLS (no cert verification)", forwardAddr)
+		} else {
+			log.Printf("Email forwarding enabled to %s", forwardAddr)
+		}
 	}
 
 	initSanitizer()
